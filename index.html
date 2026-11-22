@@ -1318,10 +1318,124 @@
       });
     });
 
-    // Submit order → WhatsApp
-    submitBtn.addEventListener("click", () => {
+    // ===== Sync order to admin (JSONBin) =====
+    const FARSS_BIN = "6b035d7affd5d16053d65609";
+    const FARSS_KEY = "$2a$10$gpPMJQ8kY01307PbTQV6medsfF7D8L.vcchQp8oiDZ.vhLQRoxUPu";
+    const FARSS_API = "https://api.jsonbin.io/v3/b/" + FARSS_BIN;
+
+    function farssUid() {
+      return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+    }
+    function farssToday() {
+      return new Date().toISOString().slice(0, 10);
+    }
+    function mapProductType(name) {
+      return /هانج|تاج/i.test(name) ? "Hang tag" : "Sticker";
+    }
+    function parseSizeCm(sizeStr) {
+      const m = String(sizeStr).match(/([\d.]+)\s*[×xX*]\s*([\d.]+)/);
+      if (m) return { w: +m[1], h: +m[2] };
+      return { w: 5, h: 5 };
+    }
+    function mapMaterial(ar) {
+      const map = {
+        "ورق لامع": "Glossy coated",
+        "ورق مطفي": "Matte coated",
+        "فينيل PVC": "PVC vinyl",
+        "فيلم شفاف": "Transparent",
+        "كارت آرت": "Art paper",
+        "كارت كرافت": "Kraft"
+      };
+      return map[ar] || "Art paper";
+    }
+    function mapFinish(ar) {
+      const map = {
+        "ورنيش": "Varnish",
+        "سلوفان": "Lamination",
+        "قص بالشكل": "Die-cut",
+        "فويل": "Foil"
+      };
+      return map[ar] || "None";
+    }
+
+    async function pushOrderToAdmin(customer, items, extraNotes) {
+      const headers = {
+        "Content-Type": "application/json",
+        "X-Access-Key": FARSS_KEY
+      };
+      const getRes = await fetch(FARSS_API + "/latest", { headers: { "X-Access-Key": FARSS_KEY } });
+      if (!getRes.ok) throw new Error("GET " + getRes.status);
+      const body = await getRes.json();
+      const root = body.record && body.record.app === "farss" ? body.record
+        : (body.app === "farss" ? body : null);
+      const d = (root && root.d) ? JSON.parse(JSON.stringify(root.d)) : { cust: [], orders: [], seq: 1, del: {}, setU: 0, set: {} };
+      d.cust = Array.isArray(d.cust) ? d.cust : [];
+      d.orders = Array.isArray(d.orders) ? d.orders : [];
+      d.del = d.del || {};
+      let seq = Math.max(d.seq || 1, d.orders.reduce((m, o) => Math.max(m, o.no || 0), 0) + 1);
+
+      const phoneNorm = customer.phone.replace(/\s+/g, "");
+      let cust = d.cust.find(c => (c.phone || "").replace(/\s+/g, "") === phoneNorm);
+      const now = Date.now();
+      if (!cust) {
+        cust = { id: farssUid(), name: customer.name, phone: customer.phone, _u: now };
+        d.cust.push(cust);
+      } else {
+        cust.name = customer.name || cust.name;
+        cust.phone = customer.phone || cust.phone;
+        cust._u = now;
+      }
+
+      const newOrders = items.map((item) => {
+        const dim = parseSizeCm(item.size);
+        const noteParts = [
+          "من الموقع: " + item.name,
+          item.size,
+          customer.email ? "إيميل: " + customer.email : "",
+          customer.address ? "عنوان: " + customer.address : "",
+          extraNotes
+        ].filter(Boolean);
+        return {
+          id: farssUid(),
+          no: seq++,
+          date: farssToday(),
+          cid: cust.id,
+          type: mapProductType(item.name),
+          w: dim.w,
+          h: dim.h,
+          qty: Math.max(1, parseInt(item.qty, 10) || 1000),
+          mat: mapMaterial(item.material),
+          col: "CMYK",
+          fin: mapFinish(item.finish),
+          disc: 0,
+          pri: "normal",
+          vat: false,
+          total: 0,
+          paid: 0,
+          due: "",
+          status: "new",
+          notes: noteParts.join(" · "),
+          _u: now
+        };
+      });
+      d.orders = d.orders.concat(newOrders);
+      d.seq = seq;
+
+      const payload = { app: "farss", v: 1, d: d };
+      const putRes = await fetch(FARSS_API, {
+        method: "PUT",
+        headers,
+        body: JSON.stringify(payload)
+      });
+      if (!putRes.ok) throw new Error("PUT " + putRes.status);
+      return newOrders.map(o => o.no);
+    }
+
+    // Submit order → admin + WhatsApp
+    submitBtn.addEventListener("click", async () => {
       const form = document.getElementById("orderForm");
       if (!form.reportValidity()) return;
+      if (cart.length === 0) return;
 
       const name = form.name.value.trim();
       const phone = form.phone.value.trim();
@@ -1340,8 +1454,33 @@
         message += `${i + 1}. ${item.name} — ${item.size} | ${item.material} | ${item.finish} | كمية: ${item.qty}%0A`;
       });
 
-      window.open(`https://wa.me/201278040272?text=${message}`, "_blank");
+      const originalLabel = submitBtn.textContent;
+      submitBtn.disabled = true;
+      submitBtn.textContent = "جاري إرسال الطلب...";
+
+      try {
+        await pushOrderToAdmin(
+          { name, phone, email, address },
+          cart.slice(),
+          notes
+        );
+        submitBtn.textContent = "تم ✓ افتح واتساب";
+        cart.length = 0;
+        updateCartUI();
+        form.reset();
+        window.open(`https://wa.me/201278040272?text=${message}`, "_blank");
+        setTimeout(() => {
+          submitBtn.textContent = originalLabel;
+          submitBtn.disabled = cart.length === 0;
+        }, 2000);
+      } catch (err) {
+        console.error(err);
+        submitBtn.textContent = originalLabel;
+        submitBtn.disabled = false;
+        window.open(`https://wa.me/201278040272?text=${message}`, "_blank");
+        alert("الطلب اتبعت على واتساب، لكن مقدرناش نحدّث لوحة الأدمن تلقائي. لو المشكلة اتكررت تأكد من اتصال النت ومفاتيح JSONBin.");
+      }
     });
   </script>
 </body>
-</html>
+</html>س
