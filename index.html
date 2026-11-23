@@ -1320,7 +1320,7 @@
 
     // ===== Sync order to admin (JSONBin) =====
     const FARSS_BIN = "6b035d7affd5d16053d65609";
-    const FARSS_KEY = "$2a$10$gpPMJQ8kY01307PbTQV6medsfF7D8L.vcchQp8oiDZ.vhLQRoxUPu";
+    const FARSS_KEY = "$2a$10$gpPMJQ8kY01307PbTQV6medsfF7D8l.vcchQp8oiDZ.vhLQRoxUPu";
     const FARSS_API = "https://api.jsonbin.io/v3/b/" + FARSS_BIN;
 
     function farssUid() {
@@ -1414,6 +1414,7 @@
           paid: 0,
           due: "",
           status: "new",
+          src: "web",
           notes: noteParts.join(" · "),
           _u: now
         };
